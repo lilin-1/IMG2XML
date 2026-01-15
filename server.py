@@ -1,6 +1,45 @@
 import os
+import subprocess
+
+def get_freest_gpu():
+    """Run nvidia-smi to find the GPU with the most free memory."""
+    try:
+        # Query GPU index and free memory (in MiB)
+        result = subprocess.run(
+            ['nvidia-smi', '--query-gpu=index,memory.free', '--format=csv,noheader,nounits'],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+        )
+        if result.returncode != 0:
+            print(f"⚠️ Warning: nvidia-smi failed, defaulting to GPU 0.")
+            return "0"
+
+        gpu_stats = []
+        for line in result.stdout.strip().split('\n'):
+            parts = line.split(',')
+            if len(parts) == 2:
+                index = parts[0].strip()
+                memory_free = int(parts[1].strip())
+                gpu_stats.append((index, memory_free))
+
+        if not gpu_stats:
+            return "0"
+
+        # Select GPU with max free memory
+        best_gpu = max(gpu_stats, key=lambda x: x[1])
+        print(f"✅ Auto-selected GPU {best_gpu[0]} with {best_gpu[1]} MiB free memory.")
+        return best_gpu[0]
+
+    except Exception as e:
+        print(f"⚠️ GPU auto-selection failed: {e}. Defaulting to GPU 0.")
+        return "0"
+
 # CRITICAL: Set CUDA device BEFORE importing torch or any library that imports torch
-os.environ["CUDA_VISIBLE_DEVICES"] = "2"
+# If CUDA_VISIBLE_DEVICES is already set in shell (e.g. via 'CUDA_VISIBLE_DEVICES=1 python server.py'), use it.
+# Otherwise, dynamically find the freest GPU.
+if "CUDA_VISIBLE_DEVICES" not in os.environ:
+    os.environ["CUDA_VISIBLE_DEVICES"] = get_freest_gpu()
+else:
+    print(f"ℹ️ Using environment provided CUDA_VISIBLE_DEVICES={os.environ['CUDA_VISIBLE_DEVICES']}")
 
 import shutil
 import uuid
