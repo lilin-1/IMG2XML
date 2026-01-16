@@ -4,8 +4,8 @@ import yaml
 import shutil
 import traceback  # 新增：打印详细堆栈
 from pathlib import Path
-from sam3_extractor import main as sam3_main
-from merge_xml import run_text_extraction, merge_xml
+from scripts.sam3_extractor import main as sam3_main
+from scripts.merge_xml import run_text_extraction, merge_xml
 
 # 加载配置
 CONFIG_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "config", "config.yaml")

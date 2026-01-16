@@ -71,3 +71,22 @@ dominant_color:
   brightness_min: 12       # 最小亮度（过滤纯黑，0-255）
   brightness_max: 240      # 最大亮度（过滤纯白，0-255）
   stroke_brightness_ratio: 0.85 # 描边色亮度衰减比例（保持色相不变）
+  
+# SAM3/RMBG 服务端口（供脚本启动和客户端读取）
+services:
+  sam3_endpoints:
+    - "http://127.0.0.1:9001"
+    - "http://127.0.0.1:9002"
+  # SAM3 服务对应的 GPU 绑定（与 sam3_endpoints 顺序对应）。如需 CPU，可将 DEVICE=cpu 运行脚本。
+  sam3_gpus:
+    - 2
+    - 2
+  rmbg_endpoints:
+    - "http://127.0.0.1:9101"
+    - "http://127.0.0.1:9102"
+  # RMBG 服务对应的 GPU 绑定（与 rmbg_endpoints 顺序对应）。留空则按 onnxruntime 默认选择。
+  rmbg_gpus:
+    - 3
+    - 3
+  # 可选：覆盖默认的 RMBG 模型路径
+  rmbg_model_path: ""  # 为空则使用 models/rmbg/model.onnx
