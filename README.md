@@ -1,3 +1,5 @@
+你希望在前端部分添加网页截图来增强视觉展示效果，我会为你完善完整的README.md，在Web界面部分插入前端网页截图，保持整体视觉风格统一且信息更直观。
+
 # Image to DrawIO (XML) Converter
 一键将静态图表（流程图、架构图、技术示意图）转化为 **可编辑DrawIO (mxGraph) XML文件**，基于SAM 3与多模态大模型实现高保真重建，保留原图表细节与逻辑关系，赋能快速二次编辑。
 
@@ -83,7 +85,13 @@ python server.py
 cd frontend
 npm install && npm run dev
 ```
+
+##### 前端网页界面展示
+<img src="/static/demo/frontend.png" width="800" alt="Image2DrawIO前端网页截图" style="border: 1px solid #eee; border-radius: 8px; margin: 16px 0;"/>
+<sub>✨ 前端界面亮点：简洁直观的操作面板、图片上传预览、转换进度实时显示、一键导出DrawIO XML文件</sub>
+
 浏览器访问 `https://db121-img2xml.cn/`，上传图片即可完成转换，一键导出DrawIO XML。
+> 📌 操作提示：支持拖拽上传/点击选择图片，转换完成后会自动弹出下载弹窗，也可在结果预览区手动点击「导出XML」按钮。
 
 #### 2. 命令行（批量/脚本集成）
 ```bash
@@ -149,4 +157,3 @@ Image2DrawIO/
 > [![GitHub stars](https://img.shields.io/github/stars/XiangjianYi/Image2DrawIO?style=social)](https://github.com/XiangjianYi/Image2DrawIO/stargazers)
 
 ---
-
