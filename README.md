@@ -84,7 +84,7 @@ python server.py
 cd frontend
 npm install && npm run dev
 ```
-浏览器访问 `http://localhost:3000`，上传图片即可完成转换，一键导出DrawIO XML。
+浏览器访问 `https://db121-img2xml.cn/`，上传图片即可完成转换，一键导出DrawIO XML。
 
 #### 2. 命令行（批量/脚本集成）
 ```bash
