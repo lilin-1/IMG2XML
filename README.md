@@ -54,7 +54,6 @@
     ```bash
     git clone https://github.com/XiangjianYi/Image2DrawIO.git
     cd Image2DrawIO
-    pip install -r requirements.txt
     ```
 
 2.  模型准备
