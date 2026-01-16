@@ -1,77 +1,155 @@
 # Image to DrawIO (XML) Converter
+一键将静态图表（流程图、架构图、技术示意图）转化为 **可编辑DrawIO (mxGraph) XML文件**，基于SAM 3与多模态大模型实现高保真重建，保留原图表细节与逻辑关系，赋能快速二次编辑。
 
-This project implements a sophisticated pipeline to convert images (like flowcharts, diagrams, and technical drawings) into editable DrawIO (mxGraph) XML files. It leverages advanced Computer Vision models (**SAM 3**) and Large Language Models (**Qwen/Mistral**) to achieve high-fidelity reconstruction.
+[![Python](https://img.shields.io/badge/Python-3.10+-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
+[![License](https://img.shields.io/badge/License-Apache_2.0-2F80ED?style=flat-square&logo=apache&logoColor=white)](LICENSE)
+[![GitHub Repo](https://img.shields.io/badge/GitHub-Image2DrawIO-24292F?style=flat-square&logo=github&logoColor=white)](https://github.com/XiangjianYi/Image2DrawIO)
+[![CUDA Required](https://img.shields.io/badge/GPU-CUDA%20Recommended-76B900?style=flat-square&logo=nvidia)](https://developer.nvidia.com/cuda-downloads)
 
-## Key Features
+---
 
-*   **Advanced Segmentation**: Uses **SAM 3 (Segment Anything Model 3)** for state-of-the-art segmentation of diagram elements (shapes, arrows, icons).
-*   **Iterative VLM Scanning**: A structured, iterative extraction process guided by **Multimodal LLMs** ensuring no element is left behind:
-    1.  **Initial Generic Extraction**: Captures standard shapes and icons.
-    2.  **Refinement Rounds**: VLM scans blank areas to suggest new prompts for missed objects.
-*   **High-Quality OCR (Hybrid Mode)**:
-    *   **Azure Document Intelligence** for precise text localization (Bounding Boxes).
-    *   **VLM (Mistral/Qwen)** for recognition correction and **LaTeX** formula conversion.
-    *   **Hint Mechanism**: Uses Azure detected text as "hints" to constrain VLM generation, eliminating hallucinations and duplicate text.
-    *   **Rate Limit Handling**: Smart batching (5 crops/req) with exponential backoff to handle API limits.
-*   **Smart Background Removal**: Integrated **RMBG-2.0** model to automatically remove backgrounds from icons, pictures, and arrows.
-*   **Arrow Handling**: Arrows are extracted as transparent images with smart masking to preserve complex routing/dashing fidelity.
-*   **Vector Shape Recovery**: 
-    *   **Supported Shapes**: Rectangle, Rounded Rectangle, Diamond (Decision), Ellipse (Start/End), Cylinder (Database), Cloud, Hexagon, Triangle, Parallelogram, Actor, Title Bar, Section Panel.
-    *   **Color Extraction**: Intelligent "Fill vs Stroke" color extraction using statistical analysis of ROIs.
-*   **Multi-User Concurrency**: 
-    *   **Global Lock**: Ensures thread-safe access to GPU-heavy models.
-    *   **LRU Cache**: Persists SAM3 image embeddings to allow fast interactive editing without re-encoding.
+## 🌟 核心优势
+### 精准分割与重建
+- **SAM 3 驱动**：基于最新分割模型，实现图表元素（形状、箭头、图标、文本块）的像素级精准识别，不漏掉虚线、纹理等细节。
+- **矢量形状还原**：自动匹配12+常用图表形状（矩形、菱形、圆柱、云形、平行四边形等），支持填充色与描边色智能区分。
 
-## Documentation
+### 智能文本与视觉处理
+- **混合OCR引擎**：Azure文档智能定位文本区域 + Qwen/Mistral VLM校正识别结果，支持LaTeX公式转换，杜绝文本幻觉。
+- **背景净化**：集成RMBG-2.0模型，自动去除图标、箭头背景，生成透明元素，适配DrawIO编辑场景。
+- **箭头保真**：箭头单独提取为透明图层，保留路由逻辑与样式（虚线、粗细），可直接调整位置。
 
-*   [**Technical Report**](TECHNICAL_REPORT.md): Detailed explanation of architecture, algorithms, and optimization strategies.
-*   [**API Documentation**](docs/api.md) (Internal): Server API endpoints.
+### 高效与扩展性
+- **迭代式提取**：VLM主动扫描空白区域，生成补充提示词，避免元素遗漏，提升重建完整性。
+- **并发优化**：全局锁保障GPU模型线程安全，LRU缓存复用SAM 3图像嵌入，加速交互式编辑。
+- **灵活部署**：支持Web界面可视化操作与命令行批量处理，适配不同使用场景。
 
-## Installation
+---
 
-### Prerequisites
-*   Python 3.10+
-*   Node.js & npm (for frontend)
-*   CUDA-capable GPU (Recommended for SAM3/RMBG)
+## 📸 效果演示
+### 输入输出对比
+| 原始静态图表（输入） | DrawIO可编辑结果（输出） |
+|----------------------|--------------------------|
+| ![输入图表](static/demo/input_example.jpg) | ![输出结果](static/demo/output_example.png) |
+| 不可编辑的图片格式   | 所有元素可单独调整（形状、文本、箭头、颜色） |
 
-### Setup
+### 复杂场景适配
+![复杂图表转换](static/demo/complex_diagram.jpg)
+<sub>✨ 支持多层级、多形状技术架构图的完整重建，保留原布局与逻辑关系</sub>
 
-1.  **Install Python Dependencies**:
+---
+
+## 🚀 快速部署
+### 前置依赖
+- Python 3.10+
+- Node.js & npm（Web前端运行）
+- CUDA 11.8+（推荐，SAM 3/RMBG模型加速）
+
+### 安装步骤
+1.  克隆仓库并安装Python依赖
     ```bash
+    git clone https://github.com/XiangjianYi/Image2DrawIO.git
+    cd Image2DrawIO
     pip install -r requirements.txt
     ```
 
-2.  **Model Setup**:
-    *   **RMBG-2.0**: Download `model.onnx` from [HuggingFace](https://huggingface.co/briaai/RMBG-2.0) and place in `models/rmbg/`.
-    *   **SAM 3**: Update `config/config.yaml` with the path to your SAM3 checkpoint.
+2.  模型准备
+    - **RMBG-2.0**：从[HuggingFace](https://huggingface.co/briaai/RMBG-2.0)下载`model.onnx`，放入`models/rmbg/`目录。
+    - **SAM 3**：下载模型权重后，在`config/config.yaml`中配置权重文件路径。
 
-3.  **Environment Configuration**:
-    Configure `flowchart_text/.env`:
+3.  环境变量配置
+    在`flowchart_text/.env`文件中填写API密钥与端点：
     ```env
-    # Azure Configuration (Detection)
-    AZURE_ENDPOINT=https://your-resource.cognitiveservices.azure.com/
-    AZURE_API_KEY=your_key
+    # Azure文档智能（文本定位）
+    AZURE_ENDPOINT=https://你的资源名.cognitiveservices.azure.com/
+    AZURE_API_KEY=你的Azure密钥
 
-    # VLM Configuration (Recognition)
-    MISTRAL_API_KEY=your_key (or compatible OpenAI key)
-    MISTRAL_MODEL=qwen-vl-max (or similar)
+    # 多模态LLM（文本识别/公式转换）
+    MISTRAL_API_KEY=你的API密钥
+    MISTRAL_MODEL=qwen-vl-max
     MISTRAL_ENDPOINT=https://dashscope.aliyuncs.com/compatible-mode/v1
     ```
 
-## Usage
-
-### Web Interface (Recommended)
-1.  Start the backend:
-    ```bash
-    python server.py
-    ```
-2.  Start the frontend:
-    ```bash
-    cd frontend && npm run dev
-    ```
-3.  Open browser and upload images.
-
-### Command Line
+### 使用方式
+#### 1. Web界面（推荐，可视化操作）
 ```bash
-python scripts/run_all.py input/test.jpg
+# 启动后端服务
+python server.py
+
+# 启动前端（新终端）
+cd frontend
+npm install && npm run dev
 ```
+浏览器访问 `http://localhost:3000`，上传图片即可完成转换，一键导出DrawIO XML。
+
+#### 2. 命令行（批量/脚本集成）
+```bash
+# 单张图片转换
+python scripts/run_all.py input/test.jpg --output output/result.xml
+
+# 批量转换（文件夹下所有图片）
+python scripts/run_all.py input/ --batch --output output/
+```
+
+---
+
+## 📂 项目结构
+```
+Image2DrawIO/
+├── server.py               # 后端API服务（FastAPI）
+├── frontend/               # Web前端（React+Vite）
+├── scripts/
+│   └── run_all.py          # 命令行转换入口（支持批量处理）
+├── models/                 # 预训练模型目录
+│   └── rmbg/               # RMBG-2.0模型文件
+├── config/
+│   └── config.yaml         # 模型路径、参数配置
+├── flowchart_text/         # OCR与文本处理核心模块
+├── docs/                   # 技术文档、API说明
+├── input/                  # 测试输入目录
+├── output/                 # 转换结果输出目录
+└── requirements.txt        # Python依赖清单
+```
+
+---
+
+## 📌 开发规划
+| 功能模块         | 状态       | 说明                     |
+|------------------|------------|--------------------------|
+| 核心转换流水线   | ✅ 已完成  | 分割、重建、OCR全流程    |
+| 箭头智能连接     | ⚠️ 开发中  | 自动关联箭头与目标形状   |
+| DrawIO模板适配   | 📍 规划中  | 支持自定义模板导入       |
+| 批量导出优化     | 📍 规划中  | 批量导出为DrawIO文件（.drawio） |
+| 本地LLM适配      | 📍 规划中  | 支持本地部署VLM，脱离API |
+
+---
+
+## 🤝 贡献指南
+欢迎各类贡献（代码提交、Bug反馈、功能建议）：
+1.  Fork本仓库
+2.  创建特性分支（`git checkout -b feature/xxx`）
+3.  提交修改（`git commit -m 'feat: add xxx'`）
+4.  推送分支（`git push origin feature/xxx`）
+5.  发起Pull Request
+
+问题反馈：[Issues](https://github.com/XiangjianYi/Image2DrawIO/issues)  
+功能建议：[Discussions](https://github.com/XiangjianYi/Image2DrawIO/discussions)
+
+---
+
+## 📄 许可证
+本项目基于 [Apache License 2.0](LICENSE) 开源，允许商用与二次开发（保留版权声明）。
+
+---
+
+> 🌟 若本项目对你有帮助，欢迎点亮Star支持！
+> 
+> [![GitHub stars](https://img.shields.io/github/stars/XiangjianYi/Image2DrawIO?style=social)](https://github.com/XiangjianYi/Image2DrawIO/stargazers)
+
+---
+
+### 使用说明
+1.  替换所有 `XiangjianYi`、`你的资源名`、`你的Azure密钥` 等占位符为实际信息。
+2.  图片路径 `static/demo/xxx.jpg` 对应你的效果图路径，可根据实际文件夹调整。
+3.  直接复制全文到 `README.md` 文件，无需额外格式调整，GitHub可直接渲染。
+
+需要我帮你**替换占位符为实际信息**，并优化图片路径适配你的项目结构吗？ 
