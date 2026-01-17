@@ -80,7 +80,7 @@ const Login = () => {
             {isLogin ? '欢迎回来' : '创建账户'}
           </h1>
           <p className="text-slate-500 mt-2">
-            {isLogin ? '登录以继续使用 IMG2XML' : '注册即送 5 次免费额度'}
+            {isLogin ? '登录以继续使用 IMG2XML' : '注册即送 30 次免费额度'}
           </p>
         </div>
 

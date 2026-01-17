@@ -13,18 +13,26 @@ router = APIRouter()
 def get_user_by_username(db: Session, username: str):
     return db.query(models.User).filter(models.User.username == username).first()
 
+def get_user_by_email(db: Session, email: str):
+    return db.query(models.User).filter(models.User.email == email).first()
+
 @router.post("/register", response_model=UserResponse)
 def register_user(user: UserCreate, db: Session = Depends(get_db)):
     db_user = get_user_by_username(db, username=user.username)
     if db_user:
-        raise HTTPException(status_code=400, detail="Username already registered")
+        raise HTTPException(status_code=400, detail="该用户名已被注册")
+    
+    if user.email:
+        db_email = get_user_by_email(db, email=user.email)
+        if db_email:
+            raise HTTPException(status_code=400, detail="该邮箱已被注册")
     
     hashed_password = get_password_hash(user.password)
     new_user = models.User(
         username=user.username,
         email=user.email,
         hashed_password=hashed_password,
-        credit_balance=5 # 新用户送5次免费额度
+        credit_balance=30 # 新用户送30次免费额度
     )
     db.add(new_user)
     db.commit()
@@ -48,7 +56,7 @@ async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(
     if not user or not verify_password(form_data.password, user.hashed_password):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect username or password",
+            detail="用户名或密码错误",
             headers={"WWW-Authenticate": "Bearer"},
         )
     

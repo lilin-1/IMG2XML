@@ -652,7 +652,15 @@ function WorkflowApp() {
         )}
 
         {/* Main Area */}
-        <main style={{flex: 1, position: 'relative', overflow: 'hidden'}}>
+        <main style={{
+          flex: 1, 
+          display: 'flex', 
+          flexDirection: 'column', 
+          position: 'relative', 
+          overflow: 'hidden', 
+          padding: 0, 
+          margin: 0
+        }}>
             {renderMainContent()}
         </main>
       </div>
