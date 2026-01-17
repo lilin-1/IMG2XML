@@ -29,24 +29,17 @@ def get_freest_gpu():
         if not gpu_candidates:
             return "0"
 
-        # Sort by utilization (ascending) then memory (descending)
-        # We prefer a GPU with 0% utilization over one with 90%, even if the 90% one has more RAM.
+        # Auto-select best GPU
         best_gpu = sorted(gpu_candidates, key=lambda x: (x["util"], -x["mem"]))[0]
         
         print(f"✅ Auto-selected GPU {best_gpu['index']} (Util: {best_gpu['util']}%, Free: {best_gpu['mem']} MiB)")
         return best_gpu["index"]
 
-    except Exception as e:
-        print(f"⚠️ GPU auto-selection failed: {e}. Defaulting to GPU 0.")
+    except Exception:
         return "0"
 
-# CRITICAL: Set CUDA device BEFORE importing torch or any library that imports torch
-# If CUDA_VISIBLE_DEVICES is already set in shell (e.g. via 'CUDA_VISIBLE_DEVICES=1 python server.py'), use it.
-# Otherwise, dynamically find the freest GPU.
 if "CUDA_VISIBLE_DEVICES" not in os.environ:
     os.environ["CUDA_VISIBLE_DEVICES"] = get_freest_gpu()
-else:
-    print(f"ℹ️ Using environment provided CUDA_VISIBLE_DEVICES={os.environ['CUDA_VISIBLE_DEVICES']}")
 
 import shutil
 import uuid
@@ -56,10 +49,12 @@ import json
 from pathlib import Path
 from typing import List, Optional
 
-from fastapi import FastAPI, UploadFile, File, BackgroundTasks, HTTPException
+from fastapi import FastAPI, UploadFile, File, BackgroundTasks, HTTPException, Depends
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from sqlalchemy.orm import Session # Added
+from datetime import datetime # Added
 
 # 导入你的核心处理逻辑
 # 确保你的 scripts 目录在 PYTHONPATH 中，或者我们动态添加
@@ -68,7 +63,19 @@ sys.path.append(os.path.join(os.path.dirname(__file__), "scripts"))
 from scripts.sam3_extractor import main as sam3_main, Sam3ElementExtractor
 from scripts.merge_xml import run_text_extraction, merge_xml
 
+# --- 数据库与认证集成 ---
+from db.database import engine, get_db
+from db import models
+from auth import router as auth_router
+from auth.auth import get_current_user
+
+# 创建数据库表
+models.Base.metadata.create_all(bind=engine)
+
 app = FastAPI(title="SAM3 Image to DrawIO API")
+
+# 注册认证路由
+app.include_router(auth_router.router, prefix="/auth", tags=["auth"])
 
 @app.get("/")
 def root():
@@ -95,14 +102,11 @@ with open(CONFIG_PATH, "r", encoding="utf-8") as f:
 WEB_TASKS_DIR = os.path.join(BASE_DIR, "output", "web_tasks")
 os.makedirs(WEB_TASKS_DIR, exist_ok=True)
 
-# 任务缓存文件（用于持久化和重用）
-TASKS_CACHE_FILE = os.path.join(WEB_TASKS_DIR, "tasks_history.json")
-
 class TaskResponse(BaseModel):
     task_id: str
     status: str
     message: str
-    cached: bool = False # 新增字段标识是否命中缓存
+    cached: bool = False
 
 class TaskStatusResponse(BaseModel):
     task_id: str
@@ -111,13 +115,7 @@ class TaskStatusResponse(BaseModel):
     original_image_url: Optional[str] = None
     result_xml_url: Optional[str] = None
     error: Optional[str] = None
-
-# 使用内存简单的任务状态存储
-# 结构: { task_id: { status, progress, image_path, ... } }
-TASKS_DB = {}
-# 图片哈希映射缓存
-# 结构: { file_hash: task_id }
-IMAGE_HASH_MAP = {}
+    created_at: Optional[str] = None
 
 import threading
 
@@ -132,44 +130,19 @@ def get_extractor():
         GLOBAL_EXTRACTOR = Sam3ElementExtractor()
     return GLOBAL_EXTRACTOR
 
-def load_tasks_history():
-    """从磁盘加载任务历史记录"""
-    global TASKS_DB, IMAGE_HASH_MAP
-    if os.path.exists(TASKS_CACHE_FILE):
-        try:
-            with open(TASKS_CACHE_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                TASKS_DB = data.get("tasks", {})
-                IMAGE_HASH_MAP = data.get("hashes", {})
-            print(f"Loaded {len(TASKS_DB)} tasks from history.")
-        except Exception as e:
-            print(f"Error loading tasks history: {e}")
-
-def save_tasks_history():
-    """保存任务历史记录到磁盘"""
-    try:
-        data = {
-            "tasks": TASKS_DB,
-            "hashes": IMAGE_HASH_MAP
-        }
-        with open(TASKS_CACHE_FILE, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
-    except Exception as e:
-        print(f"Error saving tasks history: {e}")
-
-# 初始化时加载历史
-load_tasks_history()
-
 # -------------------------- 核心处理逻辑 --------------------------
-def process_image_background(task_id: str, image_path: str, output_dir: str, file_hash: str = None):
+def process_image_background(task_id: str, image_path: str, output_dir: str, file_hash: str = None, api_config: dict = None):
     """后台任务：执行完整的 SAM3 + OCR + Merge 流程"""
+    from db.database import SessionLocal
+    db = SessionLocal()
+
     try:
-        TASKS_DB[task_id]["status"] = "processing"
-        TASKS_DB[task_id]["progress"] = 0.1
-        # 实时保存状态
-        save_tasks_history()
-        
-        img_stem = Path(image_path).stem
+        # 更新任务为 processing
+        task = db.query(models.Task).filter(models.Task.id == task_id).first()
+        if task:
+            task.status = "processing"
+            task.progress = 10
+            db.commit()
         
         # 1. & 2. 并行执行 SAM3 提取 和 OCR 提取
         print(f"[{task_id}] Starting parallel processing: SAM3 + OCR...")
@@ -183,181 +156,211 @@ def process_image_background(task_id: str, image_path: str, output_dir: str, fil
             with GLOBAL_LOCK:
                 print(f"[{task_id}] Acquired Global SAM3 Lock. Starting inference...")
                 # 关键修改：传入 task_dir 作为输出目录，避免 output/temp/original 冲突
-                extractor.iterative_extract(img_path, specific_output_dir=output_dir)
+                extractor.iterative_extract(img_path, specific_output_dir=output_dir, api_config=api_config)
                 print(f"[{task_id}] Global SAM3 Inference finished. Lock released.")
             
             # 结果现在直接位于 task_dir (即 output_dir)
             return os.path.join(output_dir, "sam3_output.drawio.xml")
 
         # 使用线程池并行运行
-        # 注意：如果显存有限，同时运行两个大模型可能会导致 OOM。
-        # 如果遇到显存不足，请将 max_workers 改为 1 或回退到串行模式。
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
-            # 提交任务 - 使用全局模型而不是运行脚本 main (避免重复加载)
             future_sam3 = executor.submit(run_sam3_with_global_model, image_path)
             future_text = executor.submit(run_text_extraction, image_path)
             
-            # 获取结果 (会阻塞直到完成)
             sam3_xml_path = future_sam3.result()
-            print(f"[{task_id}] Step 1: SAM3 Extraction completed.")
-            
             text_xml_path = future_text.result()
-            print(f"[{task_id}] Step 2: Text Extraction completed.")
 
-        TASKS_DB[task_id]["progress"] = 0.8
+        # 更新进度
+        task = db.query(models.Task).filter(models.Task.id == task_id).first()
+        if task:
+            task.progress = 80
+            db.commit()
         
         # 3. 合并 XML
         print(f"[{task_id}] Step 3: Merging XML...")
         final_xml_path = os.path.join(output_dir, "result.drawio.xml")
         merge_xml(sam3_xml_path, text_xml_path, image_path, final_xml_path)
         
-        TASKS_DB[task_id]["progress"] = 1.0
-        TASKS_DB[task_id]["status"] = "completed"
-        TASKS_DB[task_id]["result_xml_path"] = final_xml_path
-        
-        # 任务成功完成后，记录哈希映射
-        if file_hash:
-            IMAGE_HASH_MAP[file_hash] = task_id
-            
-        save_tasks_history()
+        # 更新完成状态
+        task = db.query(models.Task).filter(models.Task.id == task_id).first()
+        if task:
+            task.status = "completed"
+            task.progress = 100
+            task.result_xml_path = final_xml_path
+            db.commit()
         
     except Exception as e:
         print(f"[{task_id}] Error: {str(e)}")
         import traceback
         traceback.print_exc()
-        TASKS_DB[task_id]["status"] = "failed"
-        TASKS_DB[task_id]["error"] = str(e)
-        save_tasks_history()
+        
+        task = db.query(models.Task).filter(models.Task.id == task_id).first()
+        if task:
+            task.status = "failed"
+            task.error_message = str(e)
+            db.commit()
+    finally:
+        db.close()
 
 # -------------------------- API 接口 --------------------------
+
 
 @app.post("/upload", response_model=TaskResponse)
 async def upload_image(
     background_tasks: BackgroundTasks, 
     file: UploadFile = File(...), 
-    force: bool = False
+    force: bool = False,
+    current_user: models.User = Depends(get_current_user), # 必须登录
+    db: Session = Depends(get_db)
 ):
     """
-    上传图片并开始处理任务
-    :param force: 是否强制重新处理（即使有缓存）
+    上传图片并开始处理任务 (需鉴权，消耗积分)
     """
-    print(f"Receive upload request: {file.filename} (Force={force})") # Debug Log
+    # 1. 检查积分
+    if current_user.credit_balance <= 0:
+        raise HTTPException(status_code=402, detail="Insufficient credit balance. Please recharge.")
     
     # 读取所有内容计算哈希
     content = await file.read()
     file_hash = hashlib.sha256(content).hexdigest()
     
-    # 检查缓存 (如果不是强制刷新)
-    if not force and file_hash in IMAGE_HASH_MAP:
-        existing_task_id = IMAGE_HASH_MAP[file_hash]
-        if existing_task_id in TASKS_DB:
-            existing_task = TASKS_DB[existing_task_id]
-            # 确保任务确实是成功的，并且文件还在
-            if existing_task["status"] == "completed" and os.path.exists(existing_task.get("result_xml_path", "")):
-                print(f"Cache Hit! HASH={file_hash} -> TaskID={existing_task_id}")
+    # 2. 检查缓存
+    if not force:
+        existing_task = db.query(models.Task).filter(
+            models.Task.file_hash == file_hash, 
+            models.Task.status == "completed"
+        ).first()
+        
+        if existing_task and os.path.exists(existing_task.result_xml_path):
+            if existing_task.user_id == current_user.id:
                 return {
-                    "task_id": existing_task_id,
+                    "task_id": existing_task.id,
                     "status": "completed",
                     "message": "Image processed loaded from cache.",
                     "cached": True
                 }
-            else:
-                # 缓存无效（文件丢失或之前失败），清除
-                del IMAGE_HASH_MAP[file_hash]
     
-    # 如果没有缓存或缓存无效，创建新任务
-    # 指针重置回开头（虽然 read() 后 file.file 可能需要 seek(0)，但我们已经读到 content 了）
-    # 由于已经读到 content，可以直接写入文件，不再需要 copyfileobj
+    # 扣除积分
+    current_user.credit_balance -= 1
+    db.add(current_user)
     
     task_id = str(uuid.uuid4())
     task_dir = os.path.join(WEB_TASKS_DIR, task_id)
     os.makedirs(task_dir, exist_ok=True)
     
-    file_ext = Path(file.filename).suffix
-    if not file_ext:
-        file_ext = ".jpg" 
-        
+    file_ext = Path(file.filename).suffix or ".jpg"
     image_path = os.path.join(task_dir, f"original{file_ext}")
     
     with open(image_path, "wb") as f:
         f.write(content)
         
-    # 初始化任务状态
-    TASKS_DB[task_id] = {
-        "status": "pending",
-        "progress": 0.0,
-        "image_path": image_path,
-        "original_filename": file.filename,
-        "hash": file_hash
-    }
-    save_tasks_history()
+    # 创建任务记录
+    new_task = models.Task(
+        id=task_id,
+        user_id=current_user.id,
+        status="pending",
+        progress=0,
+        original_filename=file.filename,
+        file_hash=file_hash,
+        image_path=image_path,
+        created_at=datetime.utcnow()
+    )
+    db.add(new_task)
+    db.commit()
     
-    # 启动后台处理任务
-    background_tasks.add_task(process_image_background, task_id, image_path, task_dir, file_hash)
+    # 构造 API 配置 (BYOK)
+    api_config = None
+    if current_user.openai_api_key:
+        api_config = {
+            "api_key": current_user.openai_api_key
+        }
+        if current_user.openai_base_url:
+            api_config["base_url"] = current_user.openai_base_url
+            
+    # 后台处理
+    background_tasks.add_task(process_image_background, task_id, image_path, task_dir, file_hash, api_config=api_config)
     
     return {
         "task_id": task_id,
         "status": "pending",
-        "message": "Image uploaded and processing started.",
+        "message": "Task queued successfully. Credit deducted.",
         "cached": False
     }
 
 @app.get("/task/{task_id}", response_model=TaskStatusResponse)
-async def get_task_status(task_id: str):
-    """查询任务状态"""
-    if task_id not in TASKS_DB:
+def get_task_status(
+    task_id: str, 
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    task = db.query(models.Task).filter(models.Task.id == task_id).first()
+    
+    if not task:
         raise HTTPException(status_code=404, detail="Task not found")
-    
-    task = TASKS_DB[task_id]
-    
+        
+    # 权限检查：只能看自己的任务
+    if task.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not authorized to access this task")
+        
     response = {
-        "task_id": task_id,
-        "status": task["status"],
-        "progress": task.get("progress", 0.0),
-        "error": task.get("error")
+        "task_id": task.id,
+        "status": task.status,
+        "progress": float(task.progress) / 100.0,
+        "error": task.error_message,
+        "created_at": str(task.created_at)
     }
     
-    # 构建资源 URL
-    if task["status"] in ["processing", "completed"]:
-         response["original_image_url"] = f"/files/{task_id}/original"
+    if task.image_path and os.path.exists(task.image_path):
+         response["original_image_url"] = f"/task/{task_id}/image"
          
-    if task["status"] == "completed":
-        response["result_xml_url"] = f"/files/{task_id}/xml"
+    if task.status == "completed" and task.result_xml_path:
+        response["result_xml_url"] = f"/task/{task_id}/download"
         
     return response
 
-@app.get("/files/{task_id}/original")
-async def get_original_image(task_id: str):
-    """获取原图"""
-    if task_id not in TASKS_DB:
-        raise HTTPException(status_code=404, detail="Task not found")
-    
-    image_path = TASKS_DB[task_id]["image_path"]
-    if not os.path.exists(image_path):
-        raise HTTPException(status_code=404, detail="File not found")
+@app.get("/task/{task_id}/image")
+def get_task_image(task_id: str, db: Session = Depends(get_db)):
+    task = db.query(models.Task).filter(models.Task.id == task_id).first()
+    if not task or not os.path.exists(task.image_path):
+        raise HTTPException(status_code=404, detail="Image not found")
         
-    return FileResponse(image_path)
+    return FileResponse(task.image_path)
 
-@app.get("/files/{task_id}/xml")
-async def get_result_xml(task_id: str):
-    """获取生成的 XML"""
-    if task_id not in TASKS_DB:
-        raise HTTPException(status_code=404, detail="Task not found")
-        
-    if TASKS_DB[task_id]["status"] != "completed":
-        raise HTTPException(status_code=400, detail="Task not completed yet")
-    
-    xml_path = TASKS_DB[task_id].get("result_xml_path")
-    if not xml_path or not os.path.exists(xml_path):
+@app.get("/task/{task_id}/download")
+def download_result(task_id: str, db: Session = Depends(get_db)):
+    task = db.query(models.Task).filter(models.Task.id == task_id).first()
+    if not task or not task.result_xml_path or not os.path.exists(task.result_xml_path):
         raise HTTPException(status_code=404, detail="Result file not found")
         
-    # 读取内容并返回（或者直接下载）
-    # 为了让 Draw.io 嵌入能够读取，直接返回文本内容也不错，或者文件流
     return FileResponse(
-        xml_path, 
+        task.result_xml_path, 
         media_type="application/xml", 
         filename=f"drawio_export_{task_id}.xml"
     )
+
+@app.get("/my-tasks", response_model=List[dict])
+def list_my_tasks(
+    skip: int = 0, 
+    limit: int = 20, 
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    tasks = db.query(models.Task).filter(models.Task.user_id == current_user.id)\
+             .order_by(models.Task.created_at.desc())\
+             .offset(skip).limit(limit).all()
+             
+    results = []
+    for t in tasks:
+        results.append({
+            "task_id": t.id,
+            "status": t.status,
+            "progress": float(t.progress) / 100.0,
+            "created_at": str(t.created_at),
+            "original_image_url": f"/task/{t.id}/image",
+            "result_xml_url": f"/task/{t.id}/download" if t.status == "completed" else None
+        })
+    return results
+
 
 class SegmentationRequest(BaseModel):
     task_id: str
@@ -365,13 +368,21 @@ class SegmentationRequest(BaseModel):
     y: int
 
 @app.post("/interactive/segment")
-async def segment_at_point(req: SegmentationRequest):
+async def segment_at_point(
+    req: SegmentationRequest,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
     """交互式单点分割"""
-    if req.task_id not in TASKS_DB:
+    task = db.query(models.Task).filter(models.Task.id == req.task_id).first()
+    
+    if not task:
         raise HTTPException(status_code=404, detail="Task not found")
         
-    task_info = TASKS_DB[req.task_id]
-    image_path = task_info["image_path"]
+    if task.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    image_path = task.image_path
     
     if not os.path.exists(image_path):
         raise HTTPException(status_code=404, detail="Image file not found")

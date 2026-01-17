@@ -13,6 +13,13 @@ venv/
 *.env
 !*.env.example
 flowchart_text/.env
+config/config.yaml
+
+# Admin Tools & Sensitive/Local Data
+scripts/add_credits.py
+users.db
+*.db
+users.db-journal
 
 # Models & Large and Binary Files - Do not upload
 models/

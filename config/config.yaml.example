@@ -1,0 +1,51 @@
+# SAM3模型配置
+sam3:
+  checkpoint_path: "/path/to/models/sam3.pt"
+  bpe_path: "./sam3/assets/bpe_simple_vocab_16e6.txt.gz"
+  score_threshold: 0.5
+  epsilon_factor: 0.02
+  min_area: 100
+  initial_prompts:
+    - "icon"
+    - "picture"        # 图片
+    - "rectangle"
+    - "rounded rectangle"
+    - "diamond"        # 决策/菱形
+    - "ellipse"        # 开始/结束/圆形
+    - "cloud"          # 云服务
+    - "arrow"          # 箭头
+    - "section_panel"  # 虚线框/分组
+    - "title bar"
+    - "circle"
+    - "trapezoid"
+    - "square"
+  # 其他可扩展的prompts: triangle, hexagon, parallelogram, actor
+
+# 多模态大模型配置（示例为OpenAI GPT-4V，可替换为Qwen-VL/InternVL等）
+multimodal:
+  mode: "api"  # "api" 或 "local"
+  
+  # API 模式配置 (Cloud)
+  api_key: "YOUR_API_KEY_HERE" 
+  base_url: "YOUR_BASE_URL_HERE"
+  model: "qwen3-vl-235b-a22b-instruct"
+  
+  # 本地模式配置 (Ollama)
+  # 使用 OpenAI 兼容接口连接本地 Ollama
+  local_base_url: "http://localhost:11434/v1"
+  local_api_key: "ollama"
+  local_model: "qwen3-vl:235b-a22b-instruct-q4_K_M"
+  
+  # Experimental: Use VLM for Text OCR (replaces Azure)
+  # Set to true for End-to-End VLM (No Azure)
+  # Set to false to use Azure for detection + VLM for recognition (Hybrid)
+  force_vlm_ocr: false
+  
+  max_tokens: 4000
+  timeout: 60
+  ca_cert_path: false
+  proxy: ""  # 若无代理可留空，有代理则填写完整地址
+
+# 路径配置
+paths:
+  # ... (default paths)

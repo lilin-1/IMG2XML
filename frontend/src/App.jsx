@@ -1,16 +1,16 @@
 
-import React, { useState, useEffect, useReducer, useRef } from 'react';
+import React, { useState, useEffect, useReducer, useRef, useContext } from 'react';
 import axios from 'axios';
 import DrawioEditor from './DrawioEditor';
-import { Upload, FileImage, Loader2, CheckCircle, AlertCircle, Eye, EyeOff, Layout, Plus, Image as ImageIcon, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Upload, FileImage, Loader2, CheckCircle, AlertCircle, Eye, EyeOff, Layout, Plus, Image as ImageIcon, ChevronLeft, ChevronRight, Settings, LogOut, User } from 'lucide-react';
 import './App.css'
+import { AuthProvider, AuthContext } from './AuthContext';
+import Login from './Login';
+import SettingsModal from './SettingsModal';
 
-// 生产环境适配：使用相对路径 /api，通过 Nginx 转发到后端
-// 这样无论域名是什么，都能自动适配
+// API Configuration
 const API_BASE = "/api";
 
-// --- Reducer for Managing Tasks ---
-// Actions: ADD_TASKS, UPDATE_TASK, SELECT_TASK
 const tasksReducer = (state, action) => {
   switch (action.type) {
     case 'ADD_TASKS':
@@ -18,8 +18,8 @@ const tasksReducer = (state, action) => {
         id: Math.random().toString(36).substr(2, 9),
         file,
         name: file.name,
-        previewUrl: URL.createObjectURL(file), // Create local URL for preview
-        status: 'idle', // idle, uploading, processing, completed, error
+        previewUrl: URL.createObjectURL(file),
+        status: 'idle',
         progress: 0,
         statusMessage: 'Ready',
         backendTaskId: null,
@@ -48,7 +48,12 @@ const tasksReducer = (state, action) => {
   }
 };
 
-function App() {
+function WorkflowApp() {
+  const { auth, logout } = useContext(AuthContext);
+  const [userProfile, setUserProfile] = useState(null);
+  const [showSettings, setShowSettings] = useState(false);
+  const [showMyTasks, setShowMyTasks] = useState(false); // Toggle to show history
+
   const [state, dispatch] = useReducer(tasksReducer, {
     tasks: [],
     activeTaskId: null
@@ -76,12 +81,30 @@ function App() {
   // Derived state
   const activeTask = state.tasks.find(t => t.id === state.activeTaskId);
 
+  // --- Auth Check ---
+  if (!auth.token) {
+    return <Login />;
+  }
+
   useEffect(() => {
+    // Fetch user profile
+    axios.get(`${API_BASE}/auth/me`, {
+      headers: { Authorization: `Bearer ${auth.token}` }
+    })
+    .then(res => setUserProfile(res.data))
+    .catch(err => {
+      console.error(err);
+      if (err.response?.status === 401) logout();
+    });
+
     // Check backend status
     axios.get(`${API_BASE}/`)
       .then(() => setBackendStatus("Online"))
       .catch(err => setBackendStatus("Offline"));
-  }, []);
+      
+    // Load local tasks history (optional: merge with backend /my-tasks later)
+    // For now we just use session state for newly uploaded files.
+  }, [auth.token]);
 
   // --- Resize Logic ---
   useEffect(() => {
@@ -180,11 +203,19 @@ function App() {
     try {
       // Pass force parameter
       const uploadRes = await axios.post(`${API_BASE}/upload?force=${isForceMode}`, formData, {
-        headers: { "Content-Type": "multipart/form-data" },
+        headers: { 
+          "Content-Type": "multipart/form-data",
+          Authorization: `Bearer ${auth.token}`
+        },
         timeout: 60000 
       });
 
       const { task_id, cached } = uploadRes.data;
+      
+      // Update User Credit (locally -1)
+      if (userProfile && userProfile.credit_balance > 0) {
+        setUserProfile(prev => ({...prev, credit_balance: prev.credit_balance - 1}));
+      }
       
       dispatch({ 
         type: 'UPDATE_TASK', 
@@ -219,14 +250,18 @@ function App() {
       }
 
     } catch (error) {
+       let errorMsg = error.message;
+       if (error.response?.status === 402) {
+         errorMsg = "Insufficient credits!";
+       }
        dispatch({ 
         type: 'UPDATE_TASK', 
         payload: { 
           id: task.id, 
           updates: { 
             status: 'error', 
-            statusMessage: "Upload failed", 
-            error: error.message 
+            statusMessage: errorMsg, 
+            error: errorMsg
           } 
         } 
       });
@@ -236,7 +271,9 @@ function App() {
   const pollStatus = (localId, backendId) => {
     const interval = setInterval(async () => {
       try {
-        const res = await axios.get(`${API_BASE}/task/${backendId}`);
+        const res = await axios.get(`${API_BASE}/task/${backendId}`, {
+           headers: { Authorization: `Bearer ${auth.token}` }
+        });
         const { status: taskStatus, error, progress: taskProgress } = res.data;
 
         let updates = {};
@@ -274,7 +311,8 @@ function App() {
 
   const fetchResult = async (localId, backendId) => {
     try {
-      const res = await axios.get(`${API_BASE}/files/${backendId}/xml`, {
+      const res = await axios.get(`${API_BASE}/task/${backendId}/download`, {
+        headers: { Authorization: `Bearer ${auth.token}` },
         responseType: 'text' 
       });
       dispatch({ 
@@ -422,49 +460,64 @@ function App() {
           </button>
         )}
         <div className="brand">
-            <Layout className="w-6 h-6 text-blue-600" />
-            <span>Image2Drawio</span>
+            <Layout className="w-6 h-6 text-indigo-600" />
+            <span>IMG2XML</span>
         </div>
         
-        <label className="flex items-center gap-2 cursor-pointer ml-4 px-3 py-1 bg-white/50 rounded-full border border-gray-200 hover:bg-white transition-all select-none" title="Ignore cache and force reprocessing">
+        {/* Force Reprocess Checkbox */}
+        <label className="flex items-center gap-2 cursor-pointer ml-4 px-3 py-1 bg-white/50 rounded-full border border-gray-200 hover:bg-white transition-all select-none" title="Ignore cache">
             <input 
                 type="checkbox" 
                 checked={isForceMode}
                 onChange={(e) => setIsForceMode(e.target.checked)}
-                className="w-4 h-4 rounded text-blue-600 focus:ring-blue-500 cursor-pointer"
+                className="w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500 cursor-pointer"
             />
-            <span className="text-xs font-medium text-gray-700">Force Reprocess</span>
+            <span className="text-xs font-medium text-gray-700">Force</span>
         </label>
       </div>
 
-      <div className="header-actions">
+      <div className="header-actions flex items-center gap-4">
+        
+        {/* User Info & Settings */}
+        {userProfile && (
+            <div className="flex items-center gap-3 bg-white border border-gray-200 px-3 py-1.5 rounded-full text-sm shadow-sm">
+                <span className="font-semibold text-gray-700 tracking-tight">{userProfile.username}</span>
+                <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${userProfile.credit_balance > 0 ? 'bg-indigo-50 text-indigo-700 border border-indigo-100' : 'bg-red-50 text-red-700 border border-red-100'}`}>
+                    {userProfile.credit_balance} Credits
+                </span>
+                <div className="w-px h-4 bg-gray-200 mx-1"></div>
+                <button 
+                    onClick={() => setShowSettings(true)}
+                    className="p-1 hover:bg-gray-100 rounded-full transition-colors"
+                    title="API Settings (BYOK)"
+                >
+                    <Settings className="w-4 h-4 text-gray-500" />
+                </button>
+            </div>
+        )}
+
+        <button 
+            onClick={logout}
+            className="text-gray-400 hover:text-red-500 transition-colors p-2 hover:bg-red-50 rounded-full"
+            title="Logout"
+        >
+            <LogOut className="w-5 h-5" />
+        </button>
+
+        {/* Existing Controls */}
         {activeTask?.status === 'completed' && (
            <>
              <button 
-                className={`layout-toggle-btn ${showOriginal ? 'text-blue-600' : ''}`}
+                className={`layout-toggle-btn ${showOriginal ? 'text-indigo-600' : ''}`}
                 onClick={() => setShowOriginal(!showOriginal)}
                 title="Toggle Reference Image"
              >
                 <div className="flex items-center gap-1">
                     {showOriginal ? <Eye size={18}/> : <EyeOff size={18}/>}
-                    <span className="text-sm">Reference</span>
-                </div>
-             </button>
-             <button 
-                className={`layout-toggle-btn ${showEditor ? 'text-blue-600' : ''}`}
-                onClick={() => setShowEditor(!showEditor)}
-                title="Toggle Editor"
-             >
-                <div className="flex items-center gap-1">
-                     <Layout size={18} />
-                     <span className="text-sm">Editor</span>
                 </div>
              </button>
             </>
         )}
-        <span className={`backend-status ${backendStatus.toLowerCase()}`}>
-            {backendStatus === 'Online' ? 'Backend Connected' : 'Backend Offline'}
-        </span>
       </div>
     </header>
   );
@@ -472,7 +525,7 @@ function App() {
   const renderEmptyState = () => (
     <div className="welcome-screen">
       <div className="upload-card">
-         <h2 className="text-2xl font-bold mb-4 text-gray-900">Image2Drawio Converter</h2>
+         <h2 className="text-2xl font-bold mb-4 text-gray-900">IMG2XML Converter</h2>
          <p className="text-gray-500 mb-8">Upload multiple images to convert them into editable diagrams.</p>
          
          <div 
@@ -481,8 +534,9 @@ function App() {
             onDrop={handleDrop}
             onClick={() => document.getElementById('fileInput').click()}
          >
-            <Upload className="w-12 h-12 text-blue-500 mx-auto mb-4" />
-            <p className="text-lg text-gray-700">Click or Drag images here</p>
+            <Upload className="w-12 h-12 text-indigo-500 mx-auto mb-4" />
+            <p className="text-lg font-medium text-gray-700">Click or Drag images here</p>
+            <p className="text-sm text-gray-400 mt-2">Supports JPG, PNG</p>
             <input 
                 id="fileInput" 
                 type="file" 
@@ -505,15 +559,17 @@ function App() {
           <div style={{width: '100%', maxWidth: '400px'}}>
              <div className="progress-container">
                  <div className="flex justify-between mb-2">
-                    <span className="text-sm font-medium text-gray-700">{task.statusMessage}</span>
-                    <span className="text-sm text-gray-500">{Math.round(task.progress)}%</span>
+                    <span className="text-sm font-semibold text-gray-700">{task.statusMessage}</span>
+                    <span className="text-sm font-medium text-gray-500">{Math.round(task.progress)}%</span>
                  </div>
                  <div className="progress-bar-bg">
                     <div className="progress-bar-fill" style={{ width: `${task.progress}%` }}></div>
                  </div>
              </div>
              {task.status === 'error' && (
-                 <div className="text-red-500 text-sm mt-2 text-center">{task.error}</div>
+                 <div className="text-red-500 text-sm mt-4 text-center font-medium bg-red-50 p-2 rounded-lg border border-red-100">
+                    {task.error}
+                 </div>
              )}
           </div>
       </div>
@@ -529,7 +585,7 @@ function App() {
              ref={imagePaneRef}
            >
                <div className="image-pane-header">
-                   <span>Original Reference (Click to Segment)</span>
+                   <span>REFERENCE</span>
                </div>
                <div className="image-viewer">
                    <img 
@@ -564,11 +620,17 @@ function App() {
 
   // --- Main Render Decision ---
   const renderMainContent = () => {
+      // Safety check for state
+      if (!state || !state.tasks) return <div>Loading state...</div>;
+
       if (state.tasks.length === 0) {
           return renderEmptyState();
       }
 
-      if (!activeTask) return <div>Select a file</div>;
+      if (!activeTask) {
+        // Fallback if tasks exist but none selected (should be handled by reducer but safety first)
+        return <div className="flex h-full items-center justify-center text-gray-500">Select a file from the sidebar</div>;
+      }
 
       if (activeTask.status === 'completed' && activeTask.resultXml) {
           return renderEditorApp(activeTask);
@@ -594,8 +656,16 @@ function App() {
             {renderMainContent()}
         </main>
       </div>
+
+      {showSettings && <SettingsModal onClose={() => setShowSettings(false)} />}
     </>
   );
 }
 
-export default App;
+export default function App() {
+  return (
+    <AuthProvider>
+      <WorkflowApp />
+    </AuthProvider>
+  );
+}

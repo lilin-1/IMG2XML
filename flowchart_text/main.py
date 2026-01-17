@@ -125,7 +125,19 @@ class OCRVectorRestorer:
                 raise RuntimeError("MistralOCR missing analyze_image_end_to_end method")
         else:
             print("\n📖 步骤 1/5: 使用 Azure OCR 识别文字...")
-            azure_result = self.azure_ocr.analyze_image(str(image_path))
+            try:
+                azure_result = self.azure_ocr.analyze_image(str(image_path))
+            except Exception as e:
+                print(f"❌ Azure OCR 处理失败: {e}")
+                print("🔄 尝试自动切换到 VLM (End-to-End)模式...")
+                if self.mistral_ocr is None:
+                    try:
+                        self.mistral_ocr = MistralOCR()
+                    except Exception as ve:
+                        print(f"❌ VLM 初始化失败: {ve}")
+                        raise e
+                azure_result = self.mistral_ocr.analyze_image_end_to_end(str(image_path))
+                self.use_mistral = False
             
         print(f"   识别到 {len(azure_result.text_blocks)} 个文字块")
         

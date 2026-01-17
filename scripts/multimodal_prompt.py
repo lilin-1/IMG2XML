@@ -95,7 +95,8 @@ def get_supplement_prompts(
     mask_vis_path: str, 
     existing_prompts: list = None,
     round_index: int = 1, 
-    original_image_path: str = None
+    original_image_path: str = None,
+    api_config: dict = None
 ) -> dict:
     """
     优化版：分轮次获取补充提示词
@@ -104,10 +105,18 @@ def get_supplement_prompts(
     :param existing_prompts: 已识别的提示词列表（告诉模型这些不需要了）
     :param round_index: 当前轮次 (2=SingleWord, 3=TwoWords, 4=Phrase)
     :param original_image_path: 原始图片路径 (FIRST image)
+    :param api_config: (Optional) Override config for BYOK support. Keys: api_key, base_url, model.
     :return: 字典 {"icon_prompts": [], "picture_prompts": [], "has_missing": bool}
     """
     # 前置校验：配置加载失败直接返回空结构
-    if not MULTIMODAL_CONFIG:
+    # Note: If api_config is provided, we might not need MULTIMODAL_CONFIG fully, 
+    # but we will merge them.
+    effective_config = (MULTIMODAL_CONFIG or {}).copy()
+    if api_config:
+        effective_config.update(api_config)
+        
+    if not effective_config:  # effectively no config available
+
         print("错误：多模态配置加载失败，无法调用API")
         return {"icon_prompts": [], "picture_prompts": [], "has_missing": False}
     
@@ -206,15 +215,15 @@ Output JSON Format:
 
     # 3. 调用API
     try:
-        mode = MULTIMODAL_CONFIG.get("mode", "api")
+        mode = effective_config.get("mode", "api")
         if mode == "local":
-            api_key = MULTIMODAL_CONFIG.get("local_api_key", "ollama")
-            base_url = MULTIMODAL_CONFIG.get("local_base_url", "http://localhost:11434/v1")
-            model_name = MULTIMODAL_CONFIG.get("local_model")
+            api_key = effective_config.get("local_api_key", "ollama")
+            base_url = effective_config.get("local_base_url", "http://localhost:11434/v1")
+            model_name = effective_config.get("local_model")
         else:
-            api_key = MULTIMODAL_CONFIG.get('api_key')
-            base_url = MULTIMODAL_CONFIG.get('base_url')
-            model_name = MULTIMODAL_CONFIG.get("model")
+            api_key = effective_config.get('api_key')
+            base_url = effective_config.get('base_url')
+            model_name = effective_config.get("model")
 
         client = OpenAI(
             api_key=api_key,
@@ -226,8 +235,8 @@ Output JSON Format:
         response = client.chat.completions.create(
             model=model_name,
             messages=messages,
-            max_tokens=MULTIMODAL_CONFIG.get("max_tokens", 4000),
-            timeout=float(MULTIMODAL_CONFIG.get("timeout", 60)),
+            max_tokens=effective_config.get("max_tokens", 4000),
+            timeout=float(effective_config.get("timeout", 60)),
             temperature=0.1
         )
         

@@ -461,9 +461,11 @@ def deduplicate_elements(elements_data: dict, iou_threshold: float = 0.85) -> di
         for item in items:
             item['_temp_key'] = key # 暂存 key
             # 给不同类型赋予权重，用于冲突解决
-            # Vector 形状 > Icon > Picture > Arrow
+            # Arrow (最具体) > Vector 形状 > Icon > Picture
             priority = 1
-            if key in VECTOR_SUPPORTED_PROMPTS:
+            if key == "arrow":
+                priority = 4
+            elif key in VECTOR_SUPPORTED_PROMPTS:
                 priority = 3
             elif key == "icon":
                 priority = 2
@@ -888,7 +890,7 @@ class Sam3ElementExtractor:
         cv2.imwrite(output_path, result)
         return output_path
 
-    def iterative_extract(self, image_path: str, specific_output_dir: str = None) -> dict:
+    def iterative_extract(self, image_path: str, specific_output_dir: str = None, api_config: dict = None) -> dict:
         """
         循环迭代提取优化版 (Fixed 4-Round Strategy):
         Round 1: Initial generic prompts.
@@ -896,6 +898,7 @@ class Sam3ElementExtractor:
         Round 3: Two-word specific prompts.
         Round 4: Short phrases.
         :param specific_output_dir: 指定输出目录（用于Server隔离任务），如果不传则使用默认的 output/temp/<filename>
+        :param api_config: (Optional) Custom API config for VLM requests (BYOK)
         """
         if specific_output_dir:
             temp_dir = specific_output_dir
@@ -935,7 +938,8 @@ class Sam3ElementExtractor:
                 mask_vis_path=vis_path, 
                 existing_prompts=list(known_prompts),
                 round_index=round_idx,
-                original_image_path=image_path
+                original_image_path=image_path,
+                api_config=api_config
             )
             
             # --- 错误检测逻辑 ---

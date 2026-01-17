@@ -1,4 +1,4 @@
-# Technical Report: Image to DrawIO Conversion System
+# Technical Report: IMG2XML System
 
 ## 1. Executive Summary
 
@@ -18,7 +18,7 @@ graph TD
     E --> F[Iterative Segmentation Loop]
     F --> G[Shape & Element Extraction]
     A --> H[OCR Pipeline]
-    H --> I[Azure Detection]
+    H --> I[Azure Detection/Fallback VLM]
     I --> J[VLM Recognition & Correction]
     G --> K[XML Builder]
     J --> K
@@ -42,12 +42,14 @@ Instead of relying on a fixed set of prompts, the system uses a feedback loop:
 4.  **Prompt Generation**: The VLM suggests new specific prompts (e.g., "cylinder", "actor").
 5.  **Incremental Decoding**: SAM3 decodes only the new prompts using the cached image embedding, merging results via NMS (Non-Maximum Suppression).
 
-### 3.2 Hybrid OCR with Hallucination Control
-Pure VLM OCR often "hallucinates" text processing instructions or reads text from outside the crop. Pure Azure OCR fails on LaTeX.
-**Solution**:
-1.  **Detection**: Azure provides tight bounding boxes.
-2.  **Hint Injection**: The Azure-detected text is passed to the VLM system prompt: *"Hint: The text might be close to 'detected_text'. Only correct it if necessary."*
-3.  **Constraint**: This anchors the VLM's generation, allowing it to fix typos or format LaTeX without inventing content.
+### 3.2 Hybrid OCR with Hallucination Control and Fallback
+The system employs a dual-engine OCR strategy for maximum reliability:
+1.  **Primary Strategy (Azure + VLM)**: 
+    *   **Detection**: Azure provides tight bounding boxes.
+    *   **Hint Injection**: The Azure-detected text is passed to the VLM system prompt: *"Hint: The text might be close to 'detected_text'. Only correct it if necessary."*
+    *   **Constraint**: This anchors the VLM's generation, allowing it to fix typos or format LaTeX without inventing content.
+2.  **Fallback Mechanism**: 
+    If the primary Azure service is unreachable (Connection Error/Timeout), the system automatically degrades gracefully to a **VLM-Only End-to-End** mode, where the VLM performs both detection and recognition in a single pass. This ensures service continuity even during network disruptions.
 
 ### 3.3 Rate Limit Management (The "429" Solution)
 Processing a diagram with 50+ detect text blocks can instantly trigger API rate limits.
