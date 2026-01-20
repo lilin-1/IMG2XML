@@ -224,6 +224,7 @@ Thanks to all developers who have contributed to the project and promoted its it
 | Yang Haotian |  |
 | An Minghao |  |
 | Yu Mingjie |  |
+| Chen Zhuofan |  |
 
 ## 📄 License
 This project is open-source under the [Apache License 2.0](LICENSE), allowing commercial use and secondary development (with copyright notice retained).
